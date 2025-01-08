@@ -27,6 +27,7 @@ from pdf2zh.translator import (
     DeepLXTranslator,
     OllamaTranslator,
     OpenAITranslator,
+    LLMTranslator,
     ZhipuTranslator,
     ModelScopeTranslator,
     SiliconTranslator,
@@ -36,7 +37,7 @@ from pdf2zh.translator import (
     DifyTranslator,
     AnythingLLMTranslator,
     XinferenceTranslator,
-    ArgosTranslator,
+    # ArgosTranslator,
     GorkTranslator,
     GroqTranslator,
     DeepseekTranslator,
@@ -162,7 +163,11 @@ class TranslateConverter(PDFConverterEx):
         if not prompt:
             prompt = []
         for translator in [GoogleTranslator, BingTranslator, DeepLTranslator, DeepLXTranslator, OllamaTranslator, XinferenceTranslator, AzureOpenAITranslator,
-                           OpenAITranslator, ZhipuTranslator, ModelScopeTranslator, SiliconTranslator, GeminiTranslator, AzureTranslator, TencentTranslator, DifyTranslator, AnythingLLMTranslator, ArgosTranslator, GorkTranslator, GroqTranslator, DeepseekTranslator, OpenAIlikedTranslator,]:
+                           OpenAITranslator, LLMTranslator, ZhipuTranslator, ModelScopeTranslator, SiliconTranslator, GeminiTranslator, AzureTranslator,
+                           TencentTranslator, DifyTranslator, AnythingLLMTranslator,
+                           GorkTranslator, GroqTranslator, DeepseekTranslator, OpenAIlikedTranslator,
+                        #    ArgosTranslator, 
+                           ]:
             if service_name == translator.name:
                 self.translator = translator(lang_in, lang_out, service_model, envs=envs, prompt=prompt)
         if not self.translator:
