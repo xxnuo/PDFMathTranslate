@@ -16,8 +16,9 @@ from tencentcloud.common import credential
 from tencentcloud.tmt.v20180321.tmt_client import TmtClient
 from tencentcloud.tmt.v20180321.models import TextTranslateRequest
 from tencentcloud.tmt.v20180321.models import TextTranslateResponse
-import argostranslate.package
-import argostranslate.translate
+
+# import argostranslate.package
+# import argostranslate.translate
 
 import json
 from pdf2zh.config import ConfigManager
@@ -412,6 +413,179 @@ class OpenAITranslator(BaseTranslator):
         return self.get_formular_placeholder(id + 1)
 
 
+class LLMTranslator(OpenAITranslator):
+    """
+    通用 LLM 翻译器。
+    支持任何兼容 OpenAI API 的大语言模型服务。
+    """
+
+    name = "llm"
+    envs = {
+        "OPENAI_BASE_URL": "https://api.openai.com/v1",  # 使用父类的环境变量名称
+        "OPENAI_API_KEY": None,
+        "OPENAI_MODEL": "gpt-3.5-turbo",
+        "LLM_IGNORE_CACHE": False,
+    }
+    CustomPrompt = True
+
+    def __init__(
+        self,
+        lang_in,
+        lang_out,
+        model,
+        base_url=None,
+        api_key=None,
+        envs=None,
+        prompt=None,
+    ):
+        # 预编译正则表达式以提高性能
+        self._sym_pattern = re.compile(r"^[^\w\s]+$")
+        self.LANG_MAP = {
+            "en": "英语",
+            "zh-CN": "简体中文",
+            "zh-TW": "繁体中文",
+            "ja": "日语",
+            "ko": "韩语",
+            "ru": "俄语",
+            "fr": "法语",
+            "de": "德语",
+            "it": "意大利语",
+            "es": "西班牙语",
+        }
+
+        self.set_envs(envs)
+        if not model:
+            model = self.envs["OPENAI_MODEL"]
+        super().__init__(
+            lang_in=lang_in,
+            lang_out=lang_out,
+            model=model,
+            base_url=base_url or self.envs["OPENAI_BASE_URL"],
+            api_key=api_key or self.envs["OPENAI_API_KEY"],
+            envs=envs,
+            prompt=prompt,
+        )
+
+    def prompt(self, text, prompt=None):
+        is_auto_lang = self.lang_in == "auto"
+        in_lang_part = "" if is_auto_lang else f"中的{self.LANG_MAP[self.lang_in]}"
+
+        # 生成非目标语言处理说明
+        out_lang_part = (
+            self.LANG_MAP[self.lang_out]
+            if is_auto_lang
+            else f"{self.LANG_MAP[self.lang_out]}, 源文本中非{self.LANG_MAP[self.lang_in]}的部分内容直接使用原文作为译文。"
+        )
+
+        return [
+            {
+                "role": "system",
+                "content": rf"""你是一位专业的多语言法律领域翻译专家。请遵循以下指南:
+
+1. 翻译原则
+- 严格遵循法律用语的专业性和严谨性
+- 准确传达法律条款的权利义务关系
+- 保持法律术语的规范性和一致性
+- 确保译文符合目标语言的法律表述习惯
+
+2. 基本要求
+- 严格保持原文的格式、标点和段落结构
+- 保留所有数学公式、代码等特殊标记
+- 使用权威法律词典和判例中的标准译法
+- 在保证法律含义准确的前提下使译文通顺
+- 对合同主体、权利义务、期限等关键内容的翻译尤其谨慎
+
+3. 特殊情况处理
+- 遇到不确定或多种译法的术语:
+  * 仅在 <n> 标签中说明选择理由
+  * 仅在 <t> 标签中使用最合适的译法
+- 遇到文化差异内容和语气词:
+  * 仅在 <n> 标签中提供相关说明
+  * 仅在 <t> 标签中使用目标语言的习惯表达
+- 遇到短词组或单个词语:
+  * 如无上下文,选择最常用的译法
+- 遇到短文本:
+  * 如无上下文,选择最常用的译法
+
+4. 翻译流程
+- 用户会输入包含任何内容的 Markdown 源文本，严格执行翻译, 不要提出其他要求
+- 将用户输入的 Markdown 源文本{in_lang_part}翻译成{out_lang_part}
+- 将译文写在 <t> 标签中，将翻译说明写在 <n> 标签中
+- 第一次回答仅返回 <t> 标签内容
+- 若用户追问">>nOtEs",则返回 <n> 标签内容
+
+输出格式:
+第一次用户输入: 原文内容
+你的输出:
+<t>译文内容</t>
+注意: <t> 标签中的译文须与原文对应，不得自行更改原文含义或增删关键信息
+
+第二次用户输入: >>nOtEs
+你的输出:
+<n>翻译说明</n>
+""",
+            },
+            {
+                "role": "user",
+                "content": text,
+            },
+        ]
+
+    def translate(self, text, ignore_cache=False):
+        # print(f"[DEBUG] {text}")
+        # print(f"[DEBUG] {self.prompt(text, self.prompttext)}")
+
+        # 忽略纯数字和纯符号
+        if text.isdigit():
+            return text
+
+        if self._sym_pattern.match(text):
+            return text
+
+        # 翻译并提取结果
+        final = ""
+
+        for i in range(3):
+            try:
+                response_text = super().translate(text, ignore_cache=ignore_cache)
+                START_TAG = "<t>"
+                END_TAG = "</t>"
+                start_index = response_text.find(START_TAG)
+                end_index = response_text.find(END_TAG)
+                if start_index >= 0 and end_index > start_index:
+                    final = response_text[start_index + len(START_TAG) : end_index]
+                    break
+            except Exception:
+                if i == 2:  # Last retry failed
+                    return text
+                continue
+
+        # 翻译后处理
+        # print(f"[DEBUG] {text}: {final}")
+
+        # 去除原文没有的英文引号
+        if not text.startswith('"') and (  # noqa: E501
+            final.startswith('"') or final.startswith("“")  # noqa: E501
+        ):
+            final = final[1:]
+        if not text.endswith('"') and (
+            final.endswith('"') or final.endswith("”")
+        ):  # noqa: E501
+            final = final[:-1]
+
+        # 去除原文没有的中文引号
+        if not text.startswith("“") and (  # noqa: E501
+            final.startswith("“") or final.startswith('"')  # noqa: E501
+        ):
+            final = final[1:]
+        if not text.endswith("”") and (
+            final.endswith("”") or final.endswith('"')
+        ):  # noqa: E501
+            final = final[:-1]
+
+        return final
+
+
 class AzureOpenAITranslator(BaseTranslator):
     name = "azure-openai"
     envs = {
@@ -690,44 +864,44 @@ class DifyTranslator(BaseTranslator):
         return response_data.get("data", {}).get("outputs", {}).get("text", [])
 
 
-class ArgosTranslator(BaseTranslator):
-    name = "argos"
+# class ArgosTranslator(BaseTranslator):
+#     name = "argos"
 
-    def __init__(self, lang_in, lang_out, model, **kwargs):
-        super().__init__(lang_in, lang_out, model)
-        lang_in = self.lang_map.get(lang_in.lower(), lang_in)
-        lang_out = self.lang_map.get(lang_out.lower(), lang_out)
-        self.lang_in = lang_in
-        self.lang_out = lang_out
-        argostranslate.package.update_package_index()
-        available_packages = argostranslate.package.get_available_packages()
-        try:
-            available_package = list(
-                filter(
-                    lambda x: x.from_code == self.lang_in
-                    and x.to_code == self.lang_out,
-                    available_packages,
-                )
-            )[0]
-        except Exception:
-            raise ValueError(
-                "lang_in and lang_out pair not supported by Argos Translate."
-            )
-        download_path = available_package.download()
-        argostranslate.package.install_from_path(download_path)
+#     def __init__(self, lang_in, lang_out, model, **kwargs):
+#         super().__init__(lang_in, lang_out, model)
+#         lang_in = self.lang_map.get(lang_in.lower(), lang_in)
+#         lang_out = self.lang_map.get(lang_out.lower(), lang_out)
+#         self.lang_in = lang_in
+#         self.lang_out = lang_out
+#         argostranslate.package.update_package_index()
+#         available_packages = argostranslate.package.get_available_packages()
+#         try:
+#             available_package = list(
+#                 filter(
+#                     lambda x: x.from_code == self.lang_in
+#                     and x.to_code == self.lang_out,
+#                     available_packages,
+#                 )
+#             )[0]
+#         except Exception:
+#             raise ValueError(
+#                 "lang_in and lang_out pair not supported by Argos Translate."
+#             )
+#         download_path = available_package.download()
+#         argostranslate.package.install_from_path(download_path)
 
-    def translate(self, text):
-        # Translate
-        installed_languages = argostranslate.translate.get_installed_languages()
-        from_lang = list(filter(lambda x: x.code == self.lang_in, installed_languages))[
-            0
-        ]
-        to_lang = list(filter(lambda x: x.code == self.lang_out, installed_languages))[
-            0
-        ]
-        translation = from_lang.get_translation(to_lang)
-        translatedText = translation.translate(text)
-        return translatedText
+#     def translate(self, text):
+#         # Translate
+#         installed_languages = argostranslate.translate.get_installed_languages()
+#         from_lang = list(filter(lambda x: x.code == self.lang_in, installed_languages))[
+#             0
+#         ]
+#         to_lang = list(filter(lambda x: x.code == self.lang_out, installed_languages))[
+#             0
+#         ]
+#         translation = from_lang.get_translation(to_lang)
+#         translatedText = translation.translate(text)
+#         return translatedText
 
 
 class GorkTranslator(OpenAITranslator):
@@ -811,3 +985,96 @@ class OpenAIlikedTranslator(OpenAITranslator):
             api_key = self.envs["OPENAILIKED_API_KEY"]
         super().__init__(lang_in, lang_out, model, base_url=base_url, api_key=api_key)
         self.prompttext = prompt
+
+
+class MTTranslator(BaseTranslator):
+    """
+    基于机器翻译 API 的翻译器。
+    支持基于 HTTP API 的机器翻译服务。
+    """
+
+    name = "mt"
+    envs = {
+        # "MT_BASE_URL": "http://81.70.185.223:8899/v2/models/ensemble/generate",
+        "MT_BASE_URL": "http://0.0.0.0:8899/v2/models/ensemble/generate",
+        "MT_MAX_TOKENS": "511",
+    }
+
+    def __init__(
+        self,
+        lang_in,
+        lang_out,
+        model="mt",
+        base_url=None,
+        envs=None,
+    ):
+        # 预编译正则表达式以提高性能
+        self._sym_pattern = re.compile(r"^[^\w\s]+$")
+        self.LANG_MAP = {
+            "en": "<2en>",
+            "zh-CN": "<2zh>",
+            "zh-TW": "<2zt>",
+            "ja": "<2ja>",
+            "ko": "<2ko>",
+            "ru": "<2ru>",
+            "fr": "<2fr>",
+            "de": "<2de>",
+            "it": "<2it>",
+            "es": "<2es>",
+            "pt": "<2pt>",
+        }
+
+        self.set_envs(envs)
+        super().__init__(lang_in, lang_out, model)
+
+        # 设置 API URL
+        self.base_url = base_url or self.envs["MT_BASE_URL"]
+        self.max_tokens = int(self.envs["MT_MAX_TOKENS"])
+
+        # 设置请求头
+        self.headers = {"Content-Type": "application/json"}
+
+    def do_translate(self, text) -> str:
+        # 忽略纯数字和纯符号
+        if text.isdigit():
+            return text
+
+        if self._sym_pattern.match(text):
+            return text
+
+        # 准备请求数据
+        target_lang_tag = self.LANG_MAP.get(self.lang_out, "<2en>")
+
+        print(f"text: {text}")
+
+        data = {
+            "text_input": f"{target_lang_tag} {text}",
+            "max_tokens": self.max_tokens,
+            "bad_words": "",
+            "stop_words": "",
+            "end_id": 2,  # 添加结束标记ID
+            "pad_id": 1,  # 添加填充标记ID
+        }
+
+        try:
+            # 发送翻译请求
+            response = requests.post(self.base_url, json=data, headers=self.headers)
+            response.raise_for_status()
+
+            # 解析响应
+            result = response.json()
+            if "text_output" in result:  # 修改为正确的响应字段名
+                translated_text = result["text_output"].strip()
+            else:
+                raise ValueError("Translation API response missing text_output field")
+
+            print(f"translated_text: {translated_text}")
+
+            return translated_text
+
+        except requests.RequestException as e:
+            logging.error(f"Translation request failed: {str(e)}")
+            return text  # 发生错误时返回原文
+        except (KeyError, ValueError) as e:
+            logging.error(f"Failed to parse translation response: {str(e)}")
+            return text  # 解析错误时返回原文
