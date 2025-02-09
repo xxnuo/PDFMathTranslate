@@ -28,6 +28,8 @@ from pdf2zh.translator import (
     DeepLXTranslator,
     OllamaTranslator,
     OpenAITranslator,
+    LLMTranslator,
+    MTTranslator,
     ZhipuTranslator,
     ModelScopeTranslator,
     SiliconTranslator,
@@ -37,7 +39,7 @@ from pdf2zh.translator import (
     DifyTranslator,
     AnythingLLMTranslator,
     XinferenceTranslator,
-    ArgosTranslator,
+    # ArgosTranslator,
     GorkTranslator,
     GroqTranslator,
     DeepseekTranslator,
@@ -147,6 +149,7 @@ class TranslateConverter(PDFConverterEx):
         noto: Font = None,
         envs: Dict = None,
         prompt: Template = None,
+        user_glossary: list[dict] = None,  # 新增词库参数
     ) -> None:
         super().__init__(rsrcmgr)
         self.vfont = vfont
@@ -162,9 +165,16 @@ class TranslateConverter(PDFConverterEx):
         if not envs:
             envs = {}
         for translator in [GoogleTranslator, BingTranslator, DeepLTranslator, DeepLXTranslator, OllamaTranslator, XinferenceTranslator, AzureOpenAITranslator,
-                           OpenAITranslator, ZhipuTranslator, ModelScopeTranslator, SiliconTranslator, GeminiTranslator, AzureTranslator, TencentTranslator, DifyTranslator, AnythingLLMTranslator, ArgosTranslator, GorkTranslator, GroqTranslator, DeepseekTranslator, OpenAIlikedTranslator, QwenMtTranslator,]:
+                           OpenAITranslator, ZhipuTranslator, ModelScopeTranslator, SiliconTranslator, GeminiTranslator, AzureTranslator, TencentTranslator, DifyTranslator, AnythingLLMTranslator, GorkTranslator, GroqTranslator, DeepseekTranslator, OpenAIlikedTranslator, QwenMtTranslator, LLMTranslator, MTTranslator]:
             if service_name == translator.name:
-                self.translator = translator(lang_in, lang_out, service_model, envs=envs, prompt=prompt)
+                self.translator = translator(
+                    lang_in, 
+                    lang_out, 
+                    service_model, 
+                    envs=envs, 
+                    prompt=prompt,
+                    user_glossary=user_glossary,  # 传递词库参数
+                )
         if not self.translator:
             raise ValueError("Unsupported translation service")
 

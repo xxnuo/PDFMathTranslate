@@ -77,10 +77,12 @@ def translate_patch(
     noto_name: str = "",
     noto: Font = None,
     callback: object = None,
+    progress_callback: object = None,
     cancellation_event: asyncio.Event = None,
     model: OnnxModel = None,
     envs: Dict = None,
     prompt: Template = None,
+    user_glossary: list[dict] = None,
     **kwarg: Any,
 ) -> None:
     rsrcmgr = PDFResourceManager()
@@ -98,6 +100,7 @@ def translate_patch(
         noto,
         envs,
         prompt,
+        user_glossary,
     )
 
     assert device is not None
@@ -108,17 +111,34 @@ def translate_patch(
     else:
         total_pages = doc_zh.page_count
 
+    current_page = 0
+
     parser = PDFParser(inf)
     doc = PDFDocument(parser)
+
     with tqdm.tqdm(total=total_pages) as progress:
         for pageno, page in enumerate(PDFPage.create_pages(doc)):
             if cancellation_event and cancellation_event.is_set():
                 raise CancelledError("task cancelled")
             if pages and (pageno not in pages):
                 continue
+
+            current_page += 1
             progress.update()
+
             if callback:
                 callback(progress)
+
+            if progress_callback:
+                progress_callback(
+                    {
+                        "current": current_page,
+                        "total": total_pages,
+                        "percentage": current_page / total_pages * 100,
+                        "page": pageno,
+                    }
+                )
+
             page.pageno = pageno
             pix = doc_zh[page.pageno].get_pixmap()
             image = np.fromstring(pix.samples, np.uint8).reshape(
@@ -171,10 +191,12 @@ def translate_stream(
     vfont: str = "",
     vchar: str = "",
     callback: object = None,
+    progress_callback: object = None,
     cancellation_event: asyncio.Event = None,
     model: OnnxModel = None,
     envs: Dict = None,
     prompt: Template = None,
+    user_glossary: list[dict] = None,
     **kwarg: Any,
 ):
     font_list = [("tiro", None)]
@@ -303,6 +325,7 @@ def translate(
     vfont: str = "",
     vchar: str = "",
     callback: object = None,
+    progress_callback: object = None,
     compatible: bool = False,
     cancellation_event: asyncio.Event = None,
     model: OnnxModel = None,
@@ -397,7 +420,13 @@ def download_remote_fonts(lang: str):
     font_name = LANG_NAME_MAP.get(lang, "GoNotoKurrent-Regular.ttf")
 
     # docker
-    font_path = ConfigManager.get("NOTO_FONT_PATH", Path("/app", font_name).as_posix())
+    _NOTO_FONT_PATH = os.environ.get("NOTO_FONT_PATH")
+    if _NOTO_FONT_PATH:
+        font_path = os.path.join(os.getcwd(), _NOTO_FONT_PATH)
+    else:
+        font_path = ConfigManager.get(
+            "NOTO_FONT_PATH", Path("/app", font_name).as_posix()
+        )
     if not Path(font_path).exists():
         font_path = Path(tempfile.gettempdir(), font_name).as_posix()
     if not Path(font_path).exists():
